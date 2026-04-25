@@ -91,6 +91,41 @@
   gap: 0.75rem;
 }
 
+.dev-network-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.45rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.dev-network-switcher-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.dev-network-switcher-select {
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-heading);
+  font-size: 0.9rem;
+  text-transform: lowercase;
+}
+
+.dev-network-switcher-select:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: 6px;
+}
+
 .nav-wallet {
   display: flex;
   align-items: center;
@@ -823,6 +858,35 @@
   color: var(--success);
 }
 
+.admin-section {
+  display: grid;
+  gap: 1.1rem;
+}
+
+.admin-intro {
+  display: grid;
+  gap: 0.55rem;
+  text-align: center;
+}
+
+.admin-intro .section-title,
+.admin-intro .section-subtitle {
+  margin: 0;
+}
+
+.admin-loading {
+  margin: 0;
+}
+
+.admin-error {
+  margin: 0;
+  padding: 1.5rem;
+}
+
+.admin-error p {
+  margin: 0 0 1rem;
+}
+
 .cta-band {
   width: min(1200px, calc(100% - 2rem));
   margin: 0 auto;
@@ -962,6 +1026,14 @@
 
   .campaign-card-header {
     flex-direction: column;
+  }
+
+  .admin-intro {
+    text-align: left;
+  }
+
+  .admin-error .btn {
+    width: 100%;
   }
 }
 
@@ -1176,6 +1248,10 @@
 
   .create-campaign-form .btn {
     width: 100%;
+  }
+
+  .admin-error {
+    padding: 1.2rem;
   }
 }
 

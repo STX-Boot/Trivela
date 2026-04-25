@@ -9,15 +9,20 @@ import { pathToFileURL } from 'node:url';
 import createApiKeyAuth from './middleware/apiKeyAuth.js';
 import { createRateLimiter } from './middleware/rateLimit.js';
 import logger from './middleware/logger.js';
+import securityHeaders from './middleware/securityHeaders.js';
 import { paginateItems } from './pagination.js';
 import { checkSorobanRpcHealth } from './sorobanRpc.js';
 import { resolveStellarNetworkConfig } from './config/stellarNetwork.js';
+import { validateBackendEnv } from './config/envValidation.js';
 import { createDal } from './dal/index.js';
+import { createJobRunner } from './jobs/jobRunner.js';
 
 const DEFAULT_PORT = 3001;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
 const DEFAULT_RATE_LIMIT_MAX_REQUESTS = 60;
 const DEFAULT_SHORT_CACHE_TTL_MS = 5_000;
+const DEFAULT_JSON_BODY_LIMIT = '100kb';
+const DEFAULT_RPC_POLL_INTERVAL_MS = 60_000;
 const LEGACY_API_PREFIX = '/api';
 const API_V1_PREFIX = '/api/v1';
 const CONTRACT_ID_PATTERN = /^C[A-Z2-7]{55}$/;
@@ -146,6 +151,8 @@ function validateCampaignPayload(payload, { partial = false } = {}) {
 
 export function createApp(options = {}) {
   const apiKey = options.apiKey ?? process.env.TRIVELA_API_KEY ?? '';
+  const jsonBodyLimit =
+    options.jsonBodyLimit ?? process.env.JSON_BODY_LIMIT ?? DEFAULT_JSON_BODY_LIMIT;
   const corsAllowedOrigins =
     options.corsAllowedOrigins ?? process.env.CORS_ALLOWED_ORIGINS ?? process.env.CORS_ORIGIN;
   const stellarConfig = resolveStellarNetworkConfig({
@@ -190,17 +197,27 @@ export function createApp(options = {}) {
     dbPath,
     campaigns: seed,
     campaignRepository: options.campaignRepository,
+    auditLogRepository: options.auditLogRepository,
   });
   const campaignRepository = dal.campaigns;
+  const auditLogRepository = dal.auditLogs;
   const shortCacheTtlMs = normalizePositiveInteger(
     options.shortCacheTtlMs ?? process.env.SHORT_CACHE_TTL_MS,
     DEFAULT_SHORT_CACHE_TTL_MS,
+  );
+  const rpcPollIntervalMs = normalizePositiveInteger(
+    options.rpcPollIntervalMs ?? process.env.RPC_HEALTH_POLL_INTERVAL_MS,
+    DEFAULT_RPC_POLL_INTERVAL_MS,
   );
   const shortCache = new Map();
   const indexerCursorState = {
     cursor: options.initialIndexerCursor ?? process.env.INDEXER_EVENT_CURSOR ?? null,
     updatedAt: new Date().toISOString(),
     source: options.initialIndexerCursor ?? process.env.INDEXER_EVENT_CURSOR ? 'env' : 'runtime',
+  };
+  const rpcHealthCache = {
+    updatedAt: null,
+    payload: null,
   };
 
   const app = express();
@@ -209,7 +226,7 @@ export function createApp(options = {}) {
     requestErrors: 0,
     routeHits: new Map(),
   };
-  const requireApiKey = createApiKeyAuth({ apiKey });
+  const requireApiKey = createApiKeyAuth({ apiKeys });
   const rateLimiter = createRateLimiter({
     windowMs: rateLimitWindowMs,
     maxRequests: rateLimitMaxRequests,
@@ -217,8 +234,15 @@ export function createApp(options = {}) {
   });
 
   app.use(cors(createCorsOptions(allowedOrigins)));
+  app.use(securityHeaders);
   app.use(logger);
-  app.use(express.json());
+  app.use(express.json({ limit: jsonBodyLimit }));
+  app.use((err, _req, res, next) => {
+    if (err?.type === 'entity.too.large') {
+      return res.status(413).json({ error: 'Request body too large' });
+    }
+    return next(err);
+  });
   app.use((req, res, next) => {
     metrics.requestTotal += 1;
     res.on('finish', () => {
@@ -231,11 +255,50 @@ export function createApp(options = {}) {
     next();
   });
 
+  const SCHEMA_VERSION_HEADER = 'X-Trivela-Schema-Version';
+  const SCHEMA_VERSION = '1';
+
+  app.use((req, res, next) => {
+    res.setHeader(SCHEMA_VERSION_HEADER, SCHEMA_VERSION);
+
+    const requestedVersion = req.get(SCHEMA_VERSION_HEADER);
+    if (requestedVersion && requestedVersion !== SCHEMA_VERSION) {
+      return res.status(400).json({
+        error: 'Unsupported API schema version',
+        supported: SCHEMA_VERSION,
+        requested: requestedVersion,
+      });
+    }
+
+    return next();
+  });
+
+  const jobRunner = createJobRunner({
+    handlers: {
+      async rpc_health_poll() {
+        const rpc = await checkSorobanRpcHealth({
+          rpcUrl: stellarConfig.sorobanRpcUrl,
+          fetchImpl,
+        });
+        rpcHealthCache.payload = rpc;
+        rpcHealthCache.updatedAt = new Date().toISOString();
+      },
+    },
+    logger: console,
+  });
+
+  if (!options.disableJobs && rpcPollIntervalMs > 0) {
+    jobRunner.enqueue('rpc_health_poll', null);
+    setInterval(() => jobRunner.enqueue('rpc_health_poll', null), rpcPollIntervalMs).unref?.();
+  }
+
   async function buildHealthPayload() {
-    const rpc = await checkSorobanRpcHealth({
-      rpcUrl: stellarConfig.sorobanRpcUrl,
-      fetchImpl,
-    });
+    const rpc =
+      rpcHealthCache.payload ??
+      (await checkSorobanRpcHealth({
+        rpcUrl: stellarConfig.sorobanRpcUrl,
+        fetchImpl,
+      }));
 
     return {
       status: rpc.status === 'ok' ? 'ok' : 'degraded',
@@ -243,6 +306,29 @@ export function createApp(options = {}) {
       timestamp: new Date().toISOString(),
       rpc,
     };
+  }
+
+  function formatAuditActor(req) {
+    const apiKey = req?.auth?.type === 'apiKey' ? req.auth.apiKey : '';
+    if (!apiKey) return 'anonymous';
+    const key = String(apiKey);
+    if (key.length <= 8) return 'apiKey:***';
+    return `apiKey:${key.slice(0, 4)}...${key.slice(-4)}`;
+  }
+
+  function recordAuditEntry(req, { action, entity, entityId, diff }) {
+    try {
+      auditLogRepository.create({
+        actor: formatAuditActor(req),
+        action,
+        entity,
+        entityId,
+        diff,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      console.warn('Failed to record audit entry:', error);
+    }
   }
 
   app.get('/health', async (_req, res) => {
@@ -307,6 +393,7 @@ export function createApp(options = {}) {
         createCampaign: `POST ${API_V1_PREFIX}/campaigns`,
         updateCampaign: `PUT ${API_V1_PREFIX}/campaigns/:id`,
         deleteCampaign: `DELETE ${API_V1_PREFIX}/campaigns/:id`,
+        auditLogs: `GET ${API_V1_PREFIX}/audit-logs`,
         config: `GET ${API_V1_PREFIX}/config`,
       },
       compatibility: {
@@ -329,6 +416,9 @@ export function createApp(options = {}) {
         keying: 'per API key when present, otherwise per IP address',
         windowMs: rateLimitWindowMs,
         maxRequests: rateLimitMaxRequests,
+      },
+      body: {
+        jsonLimit: jsonBodyLimit,
       },
     });
   }
@@ -412,6 +502,22 @@ export function createApp(options = {}) {
       }
       throw error;
     }
+    const { name, description, rewardPerAction, startDate, endDate } = req.body;
+    const campaign = campaignRepository.create({
+      name,
+      description: description || '',
+      rewardPerAction: rewardPerAction ?? 0,
+      startDate: startDate ?? null,
+      endDate: endDate ?? null,
+    });
+    recordAuditEntry(req, {
+      action: 'create',
+      entity: 'campaign',
+      entityId: campaign.id,
+      diff: { after: campaign },
+    });
+    shortCache.clear();
+    return res.status(201).json(campaign);
   }
 
   function updateCampaign(req, res) {
@@ -432,21 +538,52 @@ export function createApp(options = {}) {
     if (startDate !== undefined) updateFields.startDate = startDate;
     if (endDate !== undefined) updateFields.endDate = endDate;
 
+    const before = campaignRepository.getById(req.params.id);
+    if (!before) {
+      return res.status(404).json({ error: 'Campaign not found' });
+    }
+
     const campaign = campaignRepository.update(req.params.id, updateFields);
     if (!campaign) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
+    const changes = Object.keys(updateFields);
+    recordAuditEntry(req, {
+      action: 'update',
+      entity: 'campaign',
+      entityId: campaign.id,
+      diff: { before, after: campaign, changes },
+    });
     shortCache.clear();
     return res.json(campaign);
   }
 
   function deleteCampaign(req, res) {
+    const before = campaignRepository.getById(req.params.id);
     const deleted = campaignRepository.delete(req.params.id);
     if (!deleted) {
       return res.status(404).json({ error: 'Campaign not found' });
     }
+    recordAuditEntry(req, {
+      action: 'delete',
+      entity: 'campaign',
+      entityId: req.params.id,
+      diff: before ? { before } : null,
+    });
     shortCache.clear();
     return res.status(204).end();
+  }
+
+  function listAuditLogs(req, res) {
+    const entity = typeof req.query.entity === 'string' ? req.query.entity.trim() : '';
+    const entityId = typeof req.query.entityId === 'string' ? req.query.entityId.trim() : '';
+    const action = typeof req.query.action === 'string' ? req.query.action.trim() : '';
+    const items = auditLogRepository.list({
+      entity: entity || undefined,
+      entityId: entityId || undefined,
+      action: action || undefined,
+    });
+    return res.json(paginateItems(items, req.query));
   }
 
   function getIndexerCursorState(_req, res) {
@@ -478,6 +615,7 @@ export function createApp(options = {}) {
     app.get(`${prefix}/campaigns`, rateLimiter, listCampaigns);
     app.get(`${prefix}/campaigns/by-slug/:slug`, rateLimiter, getCampaignBySlug);
     app.get(`${prefix}/campaigns/:id`, rateLimiter, getCampaignById);
+    app.get(`${prefix}/audit-logs`, rateLimiter, requireApiKey, listAuditLogs);
     app.get(`${prefix}/indexer/cursor`, rateLimiter, getIndexerCursorState);
     app.post(`${prefix}/indexer/cursor`, rateLimiter, requireApiKey, setIndexerCursorState);
     app.post(`${prefix}/campaigns`, rateLimiter, requireApiKey, createCampaign);
@@ -492,6 +630,10 @@ export function createApp(options = {}) {
 }
 
 export function startServer(options = {}) {
+  if (!options.skipEnvValidation) {
+    validateBackendEnv(process.env);
+  }
+
   const app = createApp(options);
   const port = options.port ?? process.env.PORT ?? DEFAULT_PORT;
 

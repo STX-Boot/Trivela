@@ -12,36 +12,45 @@ npm run dev
 
 ## Environment
 
+The backend validates configuration on startup and fails fast with clear messages when values are invalid.
+
 - `PORT`: Server port (default `3001`)
 - `CORS_ALLOWED_ORIGINS`: Comma-separated allowed origins for CORS (example: `https://app.example.com,https://admin.example.com`)
 - `CORS_ORIGIN`: Legacy single-origin CORS setting (fallback when `CORS_ALLOWED_ORIGINS` is not set)
+- `JSON_BODY_LIMIT`: Max JSON request body size (default `100kb`; rejects larger bodies with `413`)
 - `STELLAR_NETWORK`: Explicit named network preset, `testnet` or `mainnet`
 - `SOROBAN_RPC_URL`: Optional Soroban RPC override exposed in API metadata
 - `HORIZON_URL`: Optional Horizon override exposed in API metadata
 - `STELLAR_NETWORK_PASSPHRASE`: Optional passphrase override for the chosen network preset
 - `REWARDS_CONTRACT_ID`: Optional rewards contract ID exposed by `/api/v1/config`
 - `CAMPAIGN_CONTRACT_ID`: Optional campaign contract ID exposed by `/api/v1/config`
-- `TRIVELA_API_KEY`: Optional API key for write endpoints (see below)
+- `TRIVELA_API_KEYS`: Optional comma-separated API keys for write endpoints (supports rotation; see below)
+- `TRIVELA_API_KEY`: Legacy single API key (still supported)
 - `RATE_LIMIT_WINDOW_MS`: Rate limit window for `/api/*` and `/api/v1/*` routes (default `60000`)
 - `RATE_LIMIT_MAX_REQUESTS`: Max requests per API key or IP in each window (default `60`)
+- `RPC_HEALTH_POLL_INTERVAL_MS`: Background Soroban RPC health poll interval (default `60000`; set `0` to disable)
 
 ## API Key Authentication
 
 Write endpoints (`POST`, `PUT`, `DELETE`) are protected by an **optional** API
-key. The behaviour depends on whether `TRIVELA_API_KEY` is set:
+key. The behaviour depends on whether `TRIVELA_API_KEYS`/`TRIVELA_API_KEY` is set:
 
-| `TRIVELA_API_KEY`     | Behaviour                                                            |
-| --------------------- | -------------------------------------------------------------------- |
-| **Not set** (default) | All endpoints are open — convenient for local development.           |
-| **Set to a value**    | Write endpoints require the key. Read endpoints (`GET`) remain open. |
+| Config                                         | Behaviour                                                            |
+| ---------------------------------------------- | -------------------------------------------------------------------- |
+| **No keys set** (default)                      | All endpoints are open — convenient for local development.           |
+| `TRIVELA_API_KEYS=old,new` (comma-separated)   | Write endpoints accept any configured key (supports rotation).       |
+| `TRIVELA_API_KEY=single` (legacy)              | Write endpoints accept the single configured key.                    |
 
 ### Supplying the key
 
-Include it in one of two ways:
+Include it in one of these ways (headers preferred):
 
 ```
 # Header (recommended)
 X-API-Key: <your-key>
+
+# Authorization header (also supported)
+Authorization: Bearer <your-key>
 
 # Query parameter
 GET /api/v1/campaigns?api_key=<your-key>
@@ -78,6 +87,22 @@ Legacy routes remain available under `/api/*` for backward compatibility:
 - `DELETE /api/campaigns/:id`
 
 **Migration note:** New integrations should use `/api/v1/*`. Existing clients on `/api/*` continue to work.
+
+## Response schema versioning
+
+All responses include a schema version header:
+
+```
+X-Trivela-Schema-Version: 1
+```
+
+Clients may also send `X-Trivela-Schema-Version` on requests. When present and unsupported, the API responds with `400` and includes the supported version in both the response header and body.
+
+**Schema stability:** Within a given schema version, responses aim to be backward compatible (additive changes are preferred; breaking changes require a new schema version).
+
+## Security Defaults
+
+The API sets baseline security headers on all responses (for example `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, and a restrictive `Content-Security-Policy`). `Strict-Transport-Security` is only applied when requests are served over HTTPS (or when `X-Forwarded-Proto: https` is present).
 
 ## API Endpoints
 
@@ -252,7 +277,8 @@ List all campaigns with pagination.
       "description": "Earn points for completing onboarding",
       "active": true,
       "rewardPerAction": 10,
-      "createdAt": "2024-04-01T00:00:00.000Z"
+      "createdAt": "2024-04-01T00:00:00.000Z",
+      "updatedAt": "2024-04-01T00:00:00.000Z"
     }
   ],
   "pagination": {
@@ -297,7 +323,8 @@ Get a single campaign by ID.
   "description": "Earn points for completing onboarding",
   "active": true,
   "rewardPerAction": 10,
-  "createdAt": "2024-04-01T00:00:00.000Z"
+  "createdAt": "2024-04-01T00:00:00.000Z",
+  "updatedAt": "2024-04-01T00:00:00.000Z"
 }
 ```
 
@@ -317,7 +344,7 @@ curl http://localhost:3001/api/v1/campaigns/campaign-1
 
 #### POST /api/v1/campaigns
 
-Create a new campaign. Requires API key if `TRIVELA_API_KEY` is set.
+Create a new campaign. Requires API key if `TRIVELA_API_KEYS`/`TRIVELA_API_KEY` is set.
 
 **Request Body:**
 
@@ -339,7 +366,8 @@ Create a new campaign. Requires API key if `TRIVELA_API_KEY` is set.
   "description": "Earn points throughout summer",
   "active": true,
   "rewardPerAction": 25,
-  "createdAt": "2024-04-24T10:30:00.000Z"
+  "createdAt": "2024-04-24T10:30:00.000Z",
+  "updatedAt": "2024-04-24T10:30:00.000Z"
 }
 ```
 
@@ -406,7 +434,7 @@ curl -X POST "http://localhost:3001/api/v1/campaigns?api_key=sk_prod_abc123" \
 
 #### PUT /api/v1/campaigns/:id
 
-Update an existing campaign. Requires API key if `TRIVELA_API_KEY` is set.
+Update an existing campaign. Requires API key if `TRIVELA_API_KEYS`/`TRIVELA_API_KEY` is set.
 
 **Request Body (all fields optional):**
 
@@ -428,7 +456,8 @@ Update an existing campaign. Requires API key if `TRIVELA_API_KEY` is set.
   "description": "Updated description",
   "active": false,
   "rewardPerAction": 30,
-  "createdAt": "2024-04-24T10:30:00.000Z"
+  "createdAt": "2024-04-24T10:30:00.000Z",
+  "updatedAt": "2024-04-24T10:45:00.000Z"
 }
 ```
 
@@ -463,7 +492,7 @@ curl -X PUT http://localhost:3001/api/v1/campaigns/campaign-2 \
 
 #### DELETE /api/v1/campaigns/:id
 
-Delete a campaign. Requires API key if `TRIVELA_API_KEY` is set.
+Delete a campaign. Requires API key if `TRIVELA_API_KEYS`/`TRIVELA_API_KEY` is set.
 
 **Response (204 No Content):**
 
@@ -497,6 +526,21 @@ Validation rules:
 - `description` must be a string when provided
 - `active` must be a boolean when provided
 
+## Audit Logs (Admin)
+
+Write operations on campaigns emit audit log entries. Audit logs are retrievable via an admin-only endpoint.
+
+#### GET /api/v1/audit-logs
+
+Requires API key if `TRIVELA_API_KEY` is set.
+
+**Query Parameters (optional):**
+
+- `entity` – Filter by entity (example: `campaign`)
+- `entityId` – Filter by entity id
+- `action` – Filter by action (`create`, `update`, `delete`)
+- `page`, `limit`, `offset` – Same pagination params as other list endpoints
+
 ## Docker
 
 Build image from repo root:
@@ -514,6 +558,6 @@ docker run --rm -p 3001:3001 \
   -e SOROBAN_RPC_URL=https://soroban-testnet.stellar.org \
   -e HORIZON_URL=https://horizon-testnet.stellar.org \
   -e CORS_ALLOWED_ORIGINS=http://localhost:5173 \
-  -e TRIVELA_API_KEY=dev-secret \
+  -e TRIVELA_API_KEYS=dev-secret \
   trivela-backend
 ```

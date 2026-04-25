@@ -15,8 +15,47 @@ const STELLAR_NETWORKS = {
   },
 };
 
+const CONTRACT_ID_PATTERN = /^C[A-Z2-7]{55}$/;
+
 function trimTrailingSlash(value) {
   return value.replace(/\/+$/, '');
+}
+
+function validateFrontendEnv(env = import.meta.env) {
+  const errors = [];
+
+  const apiUrl = env.VITE_API_URL;
+  if (apiUrl) {
+    try {
+      const parsed = new URL(apiUrl);
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        errors.push(`VITE_API_URL must be http(s): "${apiUrl}"`);
+      }
+    } catch {
+      errors.push(`VITE_API_URL must be a valid URL: "${apiUrl}"`);
+    }
+  }
+
+  const network = env.VITE_STELLAR_NETWORK;
+  if (network && !STELLAR_NETWORKS[String(network).trim().toLowerCase()]) {
+    errors.push(
+      `Unsupported VITE_STELLAR_NETWORK "${network}". Expected one of: ${Object.keys(STELLAR_NETWORKS).join(', ')}`,
+    );
+  }
+
+  const rewardsContractId = env.VITE_REWARDS_CONTRACT_ID;
+  if (rewardsContractId && !CONTRACT_ID_PATTERN.test(String(rewardsContractId).trim())) {
+    errors.push('VITE_REWARDS_CONTRACT_ID must be a valid Stellar contract ID');
+  }
+
+  const campaignContractId = env.VITE_CAMPAIGN_CONTRACT_ID;
+  if (campaignContractId && !CONTRACT_ID_PATTERN.test(String(campaignContractId).trim())) {
+    errors.push('VITE_CAMPAIGN_CONTRACT_ID must be a valid Stellar contract ID');
+  }
+
+  if (errors.length > 0) {
+    throw new Error(['Invalid frontend environment configuration:', ...errors.map((e) => `- ${e}`)].join('\n'));
+  }
 }
 
 function resolveNetworkConfig({
@@ -36,11 +75,19 @@ function resolveNetworkConfig({
   };
 }
 
+validateFrontendEnv();
+
 export const API_BASE_URL = trimTrailingSlash(import.meta.env.VITE_API_URL || '');
+
+const DEV_NETWORK_STORAGE_KEY = 'trivela:stellarNetwork';
 
 let runtimeConfig = {
   stellar: resolveNetworkConfig({
-    network: import.meta.env.VITE_STELLAR_NETWORK,
+    network: import.meta.env.DEV
+      ? (typeof window !== 'undefined'
+          ? window.localStorage.getItem(DEV_NETWORK_STORAGE_KEY)
+          : null) || import.meta.env.VITE_STELLAR_NETWORK
+      : import.meta.env.VITE_STELLAR_NETWORK,
     networkPassphrase: import.meta.env.VITE_STELLAR_NETWORK_PASSPHRASE,
     sorobanRpcUrl: import.meta.env.VITE_SOROBAN_RPC_URL,
     horizonUrl: import.meta.env.VITE_HORIZON_URL,
@@ -102,6 +149,24 @@ export function getRuntimeConfig() {
     contracts: { ...runtimeConfig.contracts },
     sources: { ...runtimeConfig.sources },
   };
+}
+
+export function setRuntimeStellarNetwork(network) {
+  const next = resolveNetworkConfig({ network });
+  runtimeConfig = {
+    ...runtimeConfig,
+    stellar: next,
+    sources: {
+      ...runtimeConfig.sources,
+      stellar: 'dev-switcher',
+    },
+  };
+
+  if (import.meta.env.DEV && typeof window !== 'undefined') {
+    window.localStorage.setItem(DEV_NETWORK_STORAGE_KEY, next.network);
+  }
+
+  return getRuntimeConfig();
 }
 
 export function getSorobanRpcUrl() {
