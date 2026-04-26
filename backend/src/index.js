@@ -136,6 +136,18 @@ function validateCampaignPayload(payload, { partial = false } = {}) {
     errors.push('active must be a boolean when provided');
   }
 
+  if (Object.hasOwn(payload, 'featured') && typeof payload.featured !== 'boolean') {
+    errors.push('featured must be a boolean when provided');
+  }
+
+  if (Object.hasOwn(payload, 'hidden') && typeof payload.hidden !== 'boolean') {
+    errors.push('hidden must be a boolean when provided');
+  }
+
+  if (Object.hasOwn(payload, 'hiddenReason') && payload.hiddenReason !== null && typeof payload.hiddenReason !== 'string') {
+    errors.push('hiddenReason must be a string or null when provided');
+  }
+
   for (const field of ['startDate', 'endDate']) {
     if (Object.hasOwn(payload, field)) {
       const val = payload[field];
@@ -395,6 +407,7 @@ export function createApp(options = {}) {
         deleteCampaign: `DELETE ${API_V1_PREFIX}/campaigns/:id`,
         auditLogs: `GET ${API_V1_PREFIX}/audit-logs`,
         config: `GET ${API_V1_PREFIX}/config`,
+        explorer: `GET ${API_V1_PREFIX}/explorer`,
       },
       compatibility: {
         legacyPrefix: LEGACY_API_PREFIX,
@@ -432,6 +445,13 @@ export function createApp(options = {}) {
         rewards: rewardsContractId || null,
         campaign: campaignContractId || null,
       },
+    });
+  }
+
+  function getExplorerLinks(_req, res) {
+    res.json({
+      network: stellarConfig.network,
+      explorerUrl: stellarConfig.explorerUrl,
     });
   }
 
@@ -481,7 +501,7 @@ export function createApp(options = {}) {
       });
     }
 
-    const { name, slug, description, rewardPerAction, startDate, endDate } = req.body;
+    const { name, slug, description, rewardPerAction, startDate, endDate, featured } = req.body;
     try {
       const campaign = campaignRepository.create({
         name,
@@ -490,6 +510,13 @@ export function createApp(options = {}) {
         rewardPerAction: rewardPerAction ?? 0,
         startDate: startDate ?? null,
         endDate: endDate ?? null,
+        featured: featured ?? false,
+      });
+      recordAuditEntry(req, {
+        action: 'create',
+        entity: 'campaign',
+        entityId: campaign.id,
+        diff: { after: campaign },
       });
       shortCache.clear();
       return res.status(201).json(campaign);
@@ -502,22 +529,6 @@ export function createApp(options = {}) {
       }
       throw error;
     }
-    const { name, description, rewardPerAction, startDate, endDate } = req.body;
-    const campaign = campaignRepository.create({
-      name,
-      description: description || '',
-      rewardPerAction: rewardPerAction ?? 0,
-      startDate: startDate ?? null,
-      endDate: endDate ?? null,
-    });
-    recordAuditEntry(req, {
-      action: 'create',
-      entity: 'campaign',
-      entityId: campaign.id,
-      diff: { after: campaign },
-    });
-    shortCache.clear();
-    return res.status(201).json(campaign);
   }
 
   function updateCampaign(req, res) {
@@ -529,7 +540,7 @@ export function createApp(options = {}) {
       });
     }
 
-    const { name, description, active, rewardPerAction, startDate, endDate } = req.body;
+    const { name, description, active, rewardPerAction, startDate, endDate, featured, hidden, hiddenReason } = req.body;
     const updateFields = {};
     if (name !== undefined) updateFields.name = name;
     if (description !== undefined) updateFields.description = description;
@@ -537,6 +548,9 @@ export function createApp(options = {}) {
     if (rewardPerAction !== undefined) updateFields.rewardPerAction = rewardPerAction;
     if (startDate !== undefined) updateFields.startDate = startDate;
     if (endDate !== undefined) updateFields.endDate = endDate;
+    if (featured !== undefined) updateFields.featured = featured;
+    if (hidden !== undefined) updateFields.hidden = hidden;
+    if (hiddenReason !== undefined) updateFields.hiddenReason = hiddenReason;
 
     const before = campaignRepository.getById(req.params.id);
     if (!before) {
@@ -612,6 +626,7 @@ export function createApp(options = {}) {
   function registerApiRoutes(prefix) {
     app.get(prefix, rateLimiter, apiInfo);
     app.get(`${prefix}/config`, rateLimiter, getPublicConfig);
+    app.get(`${prefix}/explorer`, rateLimiter, getExplorerLinks);
     app.get(`${prefix}/campaigns`, rateLimiter, listCampaigns);
     app.get(`${prefix}/campaigns/by-slug/:slug`, rateLimiter, getCampaignBySlug);
     app.get(`${prefix}/campaigns/:id`, rateLimiter, getCampaignById);
