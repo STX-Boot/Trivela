@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   slug              TEXT    NOT NULL UNIQUE,
   description       TEXT    NOT NULL DEFAULT '',
   active            INTEGER NOT NULL DEFAULT 1,
+  featured          INTEGER NOT NULL DEFAULT 0,
   reward_per_action INTEGER NOT NULL DEFAULT 0,
   start_date        TEXT,
   end_date          TEXT,
@@ -58,6 +59,7 @@ function rowToCampaign(row) {
     slug: row.slug,
     description: row.description,
     active: row.active === 1,
+    featured: row.featured === 1,
     rewardPerAction: row.reward_per_action,
     startDate: row.start_date ?? null,
     endDate: row.end_date ?? null,
@@ -99,11 +101,20 @@ export function createSqliteCampaignRepository({
   // Create indexes after all columns are guaranteed to exist.
   db.exec(INDEXES);
 
+  const hasFeatured = campaignColumns.some((column) => column.name === 'featured');
+  if (!hasFeatured) {
+    db.exec('ALTER TABLE campaigns ADD COLUMN featured INTEGER DEFAULT 0');
+  }
+
   if (seed.length > 0) {
     const count = db.prepare('SELECT COUNT(*) AS n FROM campaigns').get().n;
     if (count === 0) {
       const insert = db.prepare(
+<<<<<<< feat/campaign-indexes-featured-hidden-explorer
         'INSERT INTO campaigns (name, slug, description, active, reward_per_action, start_date, end_date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+=======
+        'INSERT INTO campaigns (name, slug, description, active, featured, reward_per_action, start_date, end_date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+>>>>>>> main
       );
       const insertMany = db.transaction((rows) => {
         for (const row of rows) {
@@ -113,6 +124,7 @@ export function createSqliteCampaignRepository({
             row.slug ?? generateSlug(row.name),
             row.description ?? '',
             row.active ? 1 : 0,
+            row.featured ? 1 : 0,
             row.rewardPerAction ?? 0,
             row.startDate ?? null,
             row.endDate ?? null,
@@ -166,9 +178,15 @@ export function createSqliteCampaignRepository({
     const finalSlug = slug ?? generateSlug(name);
     const info = db
       .prepare(
+<<<<<<< feat/campaign-indexes-featured-hidden-explorer
         'INSERT INTO campaigns (name, slug, description, active, reward_per_action, start_date, end_date, featured, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)',
       )
       .run(name, finalSlug, description, rewardPerAction, startDate, endDate, featured ? 1 : 0, createdAt, createdAt);
+=======
+        'INSERT INTO campaigns (name, slug, description, active, featured, reward_per_action, start_date, end_date, created_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)',
+      )
+      .run(name, finalSlug, description, featured ? 1 : 0, rewardPerAction, startDate, endDate, createdAt);
+>>>>>>> main
 
     return getById(info.lastInsertRowid);
   }
@@ -179,6 +197,7 @@ export function createSqliteCampaignRepository({
       name: 'name',
       description: 'description',
       active: 'active',
+      featured: 'featured',
       rewardPerAction: 'reward_per_action',
       startDate: 'start_date',
       endDate: 'end_date',
@@ -193,7 +212,15 @@ export function createSqliteCampaignRepository({
     for (const key of allowed) {
       if (key in fields) {
         sets.push(`${columnMap[key]} = ?`);
+<<<<<<< feat/campaign-indexes-featured-hidden-explorer
         values.push(booleanFields.has(key) ? (fields[key] ? 1 : 0) : fields[key]);
+=======
+        values.push(
+          key === 'active' || key === 'featured'
+            ? (fields[key] ? 1 : 0)
+            : fields[key],
+        );
+>>>>>>> main
       }
     }
 

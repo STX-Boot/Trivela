@@ -501,12 +501,17 @@ export function createApp(options = {}) {
       });
     }
 
+<<<<<<< feat/campaign-indexes-featured-hidden-explorer
     const { name, slug, description, rewardPerAction, startDate, endDate, featured } = req.body;
+=======
+    const { name, slug, description, featured, rewardPerAction, startDate, endDate } = req.body;
+>>>>>>> main
     try {
       const campaign = campaignRepository.create({
         name,
         slug: slug || undefined,
         description: description || '',
+        featured: featured ?? false,
         rewardPerAction: rewardPerAction ?? 0,
         startDate: startDate ?? null,
         endDate: endDate ?? null,
@@ -518,6 +523,14 @@ export function createApp(options = {}) {
         entityId: campaign.id,
         diff: { after: campaign },
       });
+
+      recordAuditEntry(req, {
+        action: 'create',
+        entity: 'campaign',
+        entityId: campaign.id,
+        diff: { after: campaign },
+      });
+
       shortCache.clear();
       return res.status(201).json(campaign);
     } catch (error) {
@@ -540,11 +553,16 @@ export function createApp(options = {}) {
       });
     }
 
+<<<<<<< feat/campaign-indexes-featured-hidden-explorer
     const { name, description, active, rewardPerAction, startDate, endDate, featured, hidden, hiddenReason } = req.body;
+=======
+    const { name, description, active, featured, rewardPerAction, startDate, endDate } = req.body;
+>>>>>>> main
     const updateFields = {};
     if (name !== undefined) updateFields.name = name;
     if (description !== undefined) updateFields.description = description;
     if (active !== undefined) updateFields.active = active;
+    if (featured !== undefined) updateFields.featured = featured;
     if (rewardPerAction !== undefined) updateFields.rewardPerAction = rewardPerAction;
     if (startDate !== undefined) updateFields.startDate = startDate;
     if (endDate !== undefined) updateFields.endDate = endDate;
