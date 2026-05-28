@@ -25,6 +25,7 @@ export const campaignCreateSchema = z
     featured: z.boolean().optional(),
     hidden: z.boolean().optional(),
     hiddenReason: z.string().nullable().optional(),
+    referralBonusPoints: z.number().int().min(0, 'referralBonusPoints must be a non-negative integer').optional(),
     startDate: isoDateOrNull.optional(),
     endDate: isoDateOrNull.optional(),
   })
@@ -55,6 +56,7 @@ export const campaignUpdateSchema = z
     featured: z.boolean().optional(),
     hidden: z.boolean().optional(),
     hiddenReason: z.string().nullable().optional(),
+    referralBonusPoints: z.number().int().min(0, 'referralBonusPoints must be a non-negative integer').optional(),
     startDate: isoDateOrNull.optional(),
     endDate: isoDateOrNull.optional(),
   })

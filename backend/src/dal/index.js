@@ -5,6 +5,7 @@ import { createSqliteCampaignRepository } from './sqliteCampaignRepository.js';
 import { assertAuditLogRepository } from './auditLogRepository.js';
 import { createSqliteAuditLogRepository } from './sqliteAuditLogRepository.js';
 import { WebhookRepository } from './webhookRepository.js';
+import { createSqliteReferralRepository } from './sqliteReferralRepository.js';
 
 export async function createDal({
   dbPath = ':memory:',
@@ -30,5 +31,6 @@ export async function createDal({
       auditLogRepository ?? createSqliteAuditLogRepository({ db }),
     ),
     webhooks: webhookRepository ?? new WebhookRepository(db),
+    referrals: createSqliteReferralRepository({ db }),
   };
 }

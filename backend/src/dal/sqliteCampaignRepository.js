@@ -27,6 +27,7 @@ function rowToCampaign(row) {
     active: row.active === 1,
     featured: row.featured === 1,
     rewardPerAction: row.reward_per_action,
+    referralBonusPoints: row.referral_bonus_points ?? 0,
     startDate: row.start_date ?? null,
     endDate: row.end_date ?? null,
     hidden: row.hidden === 1,
@@ -121,26 +122,27 @@ export function createSqliteCampaignRepository({
     return row ? rowToCampaign(row) : undefined;
   }
 
-  function create({ name, slug = undefined, description = '', active = true, rewardPerAction = 0, startDate = null, endDate = null, featured = false, hidden = false, hiddenReason = null }) {
+  function create({ name, slug = undefined, description = '', active = true, rewardPerAction = 0, referralBonusPoints = 0, startDate = null, endDate = null, featured = false, hidden = false, hiddenReason = null }) {
     const createdAt = new Date().toISOString();
     const finalSlug = slug ?? generateSlug(name);
     const info = db
       .prepare(
-        'INSERT INTO campaigns (name, slug, description, active, reward_per_action, start_date, end_date, featured, hidden, hidden_reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO campaigns (name, slug, description, active, reward_per_action, referral_bonus_points, start_date, end_date, featured, hidden, hidden_reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(name, finalSlug, description, active ? 1 : 0, rewardPerAction, startDate, endDate, featured ? 1 : 0, hidden ? 1 : 0, hiddenReason, createdAt, createdAt);
+      .run(name, finalSlug, description, active ? 1 : 0, rewardPerAction, referralBonusPoints, startDate, endDate, featured ? 1 : 0, hidden ? 1 : 0, hiddenReason, createdAt, createdAt);
 
     return getById(info.lastInsertRowid);
   }
 
   function update(id, fields) {
-    const allowed = ['name', 'description', 'active', 'rewardPerAction', 'startDate', 'endDate', 'featured', 'hidden', 'hiddenReason'];
+    const allowed = ['name', 'description', 'active', 'rewardPerAction', 'referralBonusPoints', 'startDate', 'endDate', 'featured', 'hidden', 'hiddenReason'];
     const columnMap = {
       name: 'name',
       description: 'description',
       active: 'active',
       featured: 'featured',
       rewardPerAction: 'reward_per_action',
+      referralBonusPoints: 'referral_bonus_points',
       startDate: 'start_date',
       endDate: 'end_date',
       hidden: 'hidden',

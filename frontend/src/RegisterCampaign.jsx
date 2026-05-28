@@ -16,7 +16,7 @@ import TransactionStatus from './components/TransactionStatus';
  * ─────
  * @param {string} walletAddress – Connected Stellar public key.
  */
-export default function RegisterCampaign({ walletAddress }) {
+export default function RegisterCampaign({ walletAddress, onRegistered }) {
   const [isRegistered, setIsRegistered] = useState(null);
   const [isChecking, setIsChecking] = useState(false);
   const [isRegistering, setIsRegistering] = useState(false);
@@ -73,6 +73,8 @@ export default function RegisterCampaign({ walletAddress }) {
 
       if (alreadyRegistered) {
         setNotice('You were already registered in this campaign.');
+      } else {
+        onRegistered?.();
       }
     } catch (err) {
       setError(normalizeError(err));

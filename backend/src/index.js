@@ -174,6 +174,7 @@ export async function createApp(options = {}) {
   const campaignRepository = dal.campaigns;
   const auditLogRepository = dal.auditLogs;
   const webhookRepository = dal.webhooks;
+  const referralRepository = dal.referrals;
   const webhookService = new WebhookService(webhookRepository, {
     fetchImpl,
     logger: log,
@@ -517,7 +518,7 @@ export async function createApp(options = {}) {
       });
     }
 
-    const { name, slug, description, rewardPerAction, startDate, endDate, featured, hidden, hiddenReason, active } = result.data;
+    const { name, slug, description, rewardPerAction, referralBonusPoints, startDate, endDate, featured, hidden, hiddenReason, active } = result.data;
     try {
       const campaign = campaignRepository.create({
         name,
@@ -528,6 +529,7 @@ export async function createApp(options = {}) {
         hidden: hidden ?? false,
         hiddenReason: hiddenReason ?? null,
         rewardPerAction: rewardPerAction ?? 0,
+        referralBonusPoints: referralBonusPoints ?? 0,
         startDate: startDate ?? null,
         endDate: endDate ?? null,
       });
@@ -573,7 +575,7 @@ export async function createApp(options = {}) {
       });
     }
 
-    const { name, description, active, rewardPerAction, startDate, endDate, featured, hidden, hiddenReason } = result.data;
+    const { name, description, active, rewardPerAction, referralBonusPoints, startDate, endDate, featured, hidden, hiddenReason } = result.data;
     /** @type {Record<string, unknown>} */
     const updateFields = {};
     if (name !== undefined) updateFields.name = name;
@@ -581,6 +583,7 @@ export async function createApp(options = {}) {
     if (active !== undefined) updateFields.active = active;
     if (featured !== undefined) updateFields.featured = featured;
     if (rewardPerAction !== undefined) updateFields.rewardPerAction = rewardPerAction;
+    if (referralBonusPoints !== undefined) updateFields.referralBonusPoints = referralBonusPoints;
     if (startDate !== undefined) updateFields.startDate = startDate;
     if (endDate !== undefined) updateFields.endDate = endDate;
     if (hidden !== undefined) updateFields.hidden = hidden;
@@ -798,6 +801,56 @@ export async function createApp(options = {}) {
         limit: parseInt(req.query.limit) || 100,
       });
       return res.json(paginateItems(deliveries, req.query));
+    });
+
+    // Referral routes (Issue #350)
+    app.post(`${prefix}/campaigns/:id/referrals`, rateLimiter, (req, res) => {
+      const campaign = campaignRepository.getById(req.params.id);
+      if (!campaign) {
+        return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+      }
+
+      const { referrerAddress, refereeAddress } = req.body ?? {};
+      if (!referrerAddress || typeof referrerAddress !== 'string') {
+        return res.status(400).json({ error: 'referrerAddress is required', code: 'VALIDATION_ERROR' });
+      }
+      if (!refereeAddress || typeof refereeAddress !== 'string') {
+        return res.status(400).json({ error: 'refereeAddress is required', code: 'VALIDATION_ERROR' });
+      }
+      if (referrerAddress === refereeAddress) {
+        return res.status(400).json({ error: 'referrerAddress and refereeAddress must be different', code: 'VALIDATION_ERROR' });
+      }
+
+      const referral = referralRepository.create({
+        campaignId: req.params.id,
+        referrerAddress: referrerAddress.trim(),
+        refereeAddress: refereeAddress.trim(),
+      });
+
+      if (!referral) {
+        return res.status(409).json({ error: 'Referee already attributed to a referrer for this campaign', code: 'REFERRAL_DUPLICATE' });
+      }
+
+      return res.status(201).json(referral);
+    });
+
+    app.get(`${prefix}/campaigns/:id/referrals/:walletAddress`, rateLimiter, (req, res) => {
+      const campaign = campaignRepository.getById(req.params.id);
+      if (!campaign) {
+        return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+      }
+
+      const walletAddress = req.params.walletAddress.trim();
+      const referralCount = referralRepository.countByReferrer(req.params.id, walletAddress);
+      const bonusEarned = referralCount * (campaign.referralBonusPoints ?? 0);
+
+      return res.json({
+        walletAddress,
+        campaignId: String(campaign.id),
+        referralCount,
+        referralBonusPoints: campaign.referralBonusPoints ?? 0,
+        bonusEarned,
+      });
     });
   }
 
