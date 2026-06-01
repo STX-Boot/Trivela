@@ -6,66 +6,68 @@
  * cards can be iframed by third-party sites.
  */
 
-const HSTS = 'max-age=63072000; includeSubDomains; preload';
-const REFERRER = 'strict-origin-when-cross-origin';
-const PERMISSIONS = 'camera=(), microphone=(), geolocation=()';
+import helmet from 'helmet';
 
-function buildCsp() {
-  const self = "'self'";
-  const rpcUrls = (process.env.SOROBAN_RPC_URLS || '').split(',').map((u) => u.trim()).filter(Boolean).join(' ');
-  const horizonUrl = (process.env.HORIZON_URL || '').trim();
-  const connectSrc = [self, rpcUrls, horizonUrl].filter(Boolean).join(' ');
-  return (
-    `default-src ${self}; ` +
-    `connect-src ${connectSrc}; ` +
-    `script-src ${self}; ` +
-    `style-src ${self} 'unsafe-inline'; ` +
-    `img-src ${self} data: https:; ` +
-    `frame-ancestors 'none'`
-  );
-}
+const SOROBAN_RPC_URLS = process.env.SOROBAN_RPC_URLS || '';
+const HORIZON_URL = process.env.HORIZON_URL || '';
 
-function buildEmbedCsp(origin) {
-  const self = "'self'";
-  const rpcUrls = (process.env.SOROBAN_RPC_URLS || '').split(',').map((u) => u.trim()).filter(Boolean).join(' ');
-  const horizonUrl = (process.env.HORIZON_URL || '').trim();
-  const connectSrc = [self, rpcUrls, horizonUrl].filter(Boolean).join(' ');
-  const frameAncestors = origin ? `${self} ${origin}` : '*';
-  return (
-    `default-src ${self}; ` +
-    `connect-src ${connectSrc}; ` +
-    `script-src ${self}; ` +
-    `style-src ${self} 'unsafe-inline'; ` +
-    `img-src ${self} data: https:; ` +
-    `frame-ancestors ${frameAncestors}`
-  );
-}
+const connectSrcUrls = ["'self'"]
+  .concat(SOROBAN_RPC_URLS.split(',').filter(Boolean))
+  .concat(HORIZON_URL ? [HORIZON_URL] : [])
+  .join(' ');
+
+const helmetMiddleware = helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      connectSrc: connectSrcUrls.split(' '),
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'https:'],
+      frameAncestors: ["'none'"],
+      baseUri: ["'self'"],
+    },
+  },
+  hsts: {
+    maxAge: 63072000,
+    includeSubDomains: true,
+    preload: true,
+  },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  frameguard: { action: 'deny' },
+  noSniff: true,
+  dnsPrefetchControl: { allow: false },
+  permittedCrossDomainPolicies: { permittedPolicies: 'none' },
+});
+
+const embedHelmetMiddleware = helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      connectSrc: connectSrcUrls.split(' '),
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'https:'],
+      frameAncestors: ['*'],
+    },
+  },
+  hsts: {
+    maxAge: 63072000,
+    includeSubDomains: true,
+    preload: true,
+  },
+  referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+  frameguard: false,
+  noSniff: true,
+  dnsPrefetchControl: { allow: false },
+  permittedCrossDomainPolicies: { permittedPolicies: 'none' },
+});
 
 export default function securityHeaders(req, res, next) {
-  const isEmbed = req.path.startsWith('/embed/');
-  const embedOrigin = typeof req.headers['x-embed-origin'] === 'string'
-    ? req.headers['x-embed-origin'].trim()
-    : '';
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
 
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Referrer-Policy', REFERRER);
-  res.setHeader('X-DNS-Prefetch-Control', 'off');
-  res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
-  res.setHeader('Permissions-Policy', PERMISSIONS);
-  res.setHeader('Content-Security-Policy', isEmbed ? buildEmbedCsp(embedOrigin) : buildCsp());
+  const isEmbedRoute = req.path.startsWith('/embed/');
+  const middleware = isEmbedRoute ? embedHelmetMiddleware : helmetMiddleware;
 
-  if (isEmbed) {
-    // Allow third-party sites to iframe embed routes.
-    // omit X-Frame-Options entirely — CSP frame-ancestors governs this.
-  } else {
-    res.setHeader('X-Frame-Options', 'DENY');
-  }
-
-  const forwardedProto = req.headers['x-forwarded-proto'];
-  const isHttps = req.secure || (typeof forwardedProto === 'string' && forwardedProto.includes('https'));
-  if (isHttps) {
-    res.setHeader('Strict-Transport-Security', HSTS);
-  }
-
-  next();
+  middleware(req, res, next);
 }
