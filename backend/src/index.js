@@ -496,6 +496,7 @@ export async function createApp(options = {}) {
         campaignById: `GET ${API_V1_PREFIX}/campaigns/:id`,
         campaignBySlug: `GET ${API_V1_PREFIX}/campaigns/by-slug/:slug`,
         createCampaign: `POST ${API_V1_PREFIX}/campaigns`,
+        cloneCampaign: `POST ${API_V1_PREFIX}/campaigns/:id/clone`,
         updateCampaign: `PUT ${API_V1_PREFIX}/campaigns/:id`,
         deleteCampaign: `DELETE ${API_V1_PREFIX}/campaigns/:id`,
         auditLogs: `GET ${API_V1_PREFIX}/audit-logs`,
@@ -808,6 +809,45 @@ export async function createApp(options = {}) {
   }
 
   /** @param {import('express').Request} req @param {import('express').Response} res */
+  function cloneCampaign(req, res) {
+    const sourceId = req.params.id;
+    const source = campaignRepository.getById(sourceId);
+    
+    if (!source) {
+      return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+    }
+
+    const overrides = req.body?.overrides || {};
+    
+    try {
+      const clonedCampaign = campaignRepository.clone(sourceId, overrides);
+      
+      if (!clonedCampaign) {
+        return res.status(500).json({ error: 'Failed to clone campaign', code: 'CLONE_FAILED' });
+      }
+
+      recordAuditEntry(req, {
+        action: 'clone',
+        entity: 'campaign',
+        entityId: clonedCampaign.id,
+        diff: { cloned_from: sourceId, overrides },
+      });
+
+      shortCache.clear();
+      return res.status(201).json(clonedCampaign);
+    } catch (error) {
+      if (/** @type {any} */ (error).message?.includes('UNIQUE constraint failed')) {
+        return res.status(409).json({
+          error: 'Slug already exists',
+          code: 'SLUG_CONFLICT',
+          details: ['A campaign with this slug already exists'],
+        });
+      }
+      throw error;
+    }
+  }
+
+  /** @param {import('express').Request} req @param {import('express').Response} res */
   function listAuditLogs(req, res) {
     const entity = typeof req.query.entity === 'string' ? req.query.entity.trim() : '';
     const entityId = typeof req.query.entityId === 'string' ? req.query.entityId.trim() : '';
@@ -1038,6 +1078,7 @@ export async function createApp(options = {}) {
     app.get(`${prefix}/indexer/cursor`, rateLimiter, getIndexerCursorState);
     app.post(`${prefix}/indexer/cursor`, rateLimiter, requireApiKey, setIndexerCursorState);
     app.post(`${prefix}/campaigns`, rateLimiter, requireApiKey, createCampaign);
+    app.post(`${prefix}/campaigns/:id/clone`, rateLimiter, requireApiKey, cloneCampaign);
     app.post(
       `${prefix}/campaigns/:id/image`,
       rateLimiter,
