@@ -124,7 +124,32 @@ async function waitForBackend(maxAttempts = 30, delayMs = 1000) {
   throw new Error(`Backend did not become ready after ${maxAttempts * delayMs}ms`);
 }
 
+/**
+ * Helper: Quick one-shot probe used to decide whether the lifecycle suite
+ * should run at all. This suite needs a live backend (see header docs for
+ * the docker-compose setup); the regular `playwright test` run in CI has no
+ * backend, so without this probe every test fails on the `beforeAll` timeout
+ * instead of being reported as skipped.
+ */
+async function isBackendReachable() {
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/v1/health`, {
+      signal: AbortSignal.timeout(2_000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+const backendReachable = await isBackendReachable();
+
 test.describe('Campaign Lifecycle E2E', () => {
+  test.skip(
+    !backendReachable,
+    `Requires a live backend at ${BACKEND_URL} (docker-compose environment) — see file header docs`,
+  );
+
   let campaignId: string;
   let campaignSlug: string;
   let adminApiKey: string;
