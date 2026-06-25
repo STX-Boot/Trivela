@@ -66,6 +66,7 @@ import { createFeatureFlagService } from './services/featureFlagService.js';
 import { createUsageMeteringMiddleware } from './middleware/usageMetering.js';
 import { requestTimeout } from './middleware/timeout.js';
 import { PoolSaturatedError } from './rpcPool.js';
+import { initializeWebSocket, getWebSocketServer } from './websocket/index.js';
 import { requireScope } from './middleware/rbac.js';
 
 const DEFAULT_PORT = 3001;
@@ -1976,12 +1977,6 @@ export async function startServer(options = {}) {
   }
 
   // ── Graceful shutdown (issue #650) ─────────────────────────────────────────
-  // On SIGTERM / SIGINT:
-  //   1. Stop accepting new connections (server.close).
-  //   2. Allow in-flight HTTP requests to finish for up to SHUTDOWN_GRACE_MS.
-  //   3. Send "Connection: close / will-reconnect" hint to open SSE/WS streams.
-  //   4. Flush OTel spans.
-  //   5. Exit 0 once everything is drained (or force-exit after the grace window).
   const SHUTDOWN_GRACE_MS = normalizePositiveInteger(process.env.SHUTDOWN_GRACE_MS, 15_000);
 
   let shuttingDown = false;
@@ -1991,21 +1986,17 @@ export async function startServer(options = {}) {
     shuttingDown = true;
     log.info({ signal, graceMs: SHUTDOWN_GRACE_MS }, 'graceful shutdown started');
 
-    // Force exit after the grace window so a stuck handler never blocks a deploy.
     const forceTimer = setTimeout(() => {
       log.error('graceful shutdown timed out — forcing exit');
       process.exit(1);
     }, SHUTDOWN_GRACE_MS);
     if (typeof forceTimer.unref === 'function') forceTimer.unref();
 
-    // Stop accepting new connections; drain in-flight HTTP requests.
     await new Promise((resolve) => server.close(resolve));
 
-    // Flush usage counters to DB before exiting.
     stopUsageFlush();
     await usageMeteringService.flushToDb().catch((err) => log.warn({ err }, 'usage flush warning'));
 
-    // Flush OTel exporter.
     await shutdownTracing().catch((err) => log.warn({ err }, 'OTel shutdown warning'));
 
     log.info('graceful shutdown complete');
