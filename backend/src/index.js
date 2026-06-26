@@ -48,7 +48,6 @@ import {
 import { buildCampaignStats } from './services/campaignStatsService.js';
 import { generateAllowlist } from './lib/allowlist/merkle.js';
 import { parseAllowlistCsv, validateGAddress, MAX_ALLOWLIST_ROWS } from './lib/allowlist/csv.js';
-import { initializeWebSocket, getWebSocketServer } from './websocket/index.js';
 import { createEmbedRoute } from './routes/embed.js';
 import { createVariantRoutes } from './routes/variants.js';
 import { createVariantService } from './services/variantService.js';
@@ -1869,6 +1868,94 @@ export async function createApp(options = {}) {
         referralBonusPoints: campaign.referralBonusPoints ?? 0,
         bonusEarned,
       });
+    });
+
+    // Allowlist CSV import + proof routes (Issue #514)
+    const csvUpload = multer({
+      storage: multer.memoryStorage(),
+      limits: { fileSize: 5 * 1024 * 1024 /* 5 MB */ },
+    });
+
+    app.post(
+      `${prefix}/campaigns/:id/allowlist/import`,
+      rateLimiter,
+      ...guard,
+      requireScope('campaigns:write'),
+      csvUpload.single('file'),
+      async (req, res) => {
+        const campaign = campaignRepository.getById(req.params.id);
+        if (!campaign) {
+          return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+        }
+        if (!req.file && !req.body.csv) {
+          return res.status(400).json({ error: 'No CSV data provided', code: 'MISSING_CSV' });
+        }
+        const raw = req.file ? req.file.buffer.toString('utf8') : String(req.body.csv);
+        const { rows } = parseAllowlistCsv(raw);
+        if (rows.length === 0) {
+          return res.status(400).json({ error: 'CSV contains no addresses', code: 'EMPTY_CSV' });
+        }
+        if (rows.length > MAX_ALLOWLIST_ROWS) {
+          return res.status(400).json({
+            error: `CSV exceeds maximum of ${MAX_ALLOWLIST_ROWS} rows`,
+            code: 'CSV_TOO_LARGE',
+          });
+        }
+        const invalid = rows.filter((r) => !validateGAddress(r.address));
+        if (invalid.length > 0) {
+          return res.status(400).json({
+            error: 'CSV contains invalid Stellar addresses',
+            code: 'INVALID_ADDRESSES',
+            details: invalid.slice(0, 20).map((r) => ({ row: r.row, address: r.address })),
+          });
+        }
+        try {
+          const addresses = rows.map((r) => r.address);
+          const { root, proofs } = await generateAllowlist(addresses);
+          const addressEntries = rows.map((r) => ({
+            address: r.address,
+            label: r.label,
+            bonus_points: r.bonus_points ? Number(r.bonus_points) : undefined,
+            proof: proofs[r.address],
+          }));
+          allowlistRepository.upsertAllowlistEntries({ campaignId: req.params.id, addressEntries, merkleRootHex: root });
+          return res.status(201).json({
+            campaignId: String(req.params.id),
+            merkleRoot: root,
+            count: rows.length,
+          });
+        } catch (err) {
+          log.error({ err, campaignId: req.params.id }, 'Allowlist import failed');
+          return res.status(500).json({ error: 'Failed to generate allowlist', code: 'ALLOWLIST_ERROR' });
+        }
+      },
+    );
+
+    app.get(`${prefix}/campaigns/:id/allowlist`, rateLimiter, ...guard, (req, res) => {
+      const campaign = campaignRepository.getById(req.params.id);
+      if (!campaign) {
+        return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+      }
+      const entries = allowlistRepository.listAllowlist(req.params.id);
+      const merkleRoot = entries[0]?.merkleRoot ?? null;
+      return res.json({ campaignId: String(req.params.id), merkleRoot, count: entries.length, entries });
+    });
+
+    app.get(`${prefix}/campaigns/:id/allowlist/:address/proof`, rateLimiter, (req, res) => {
+      const campaign = campaignRepository.getById(req.params.id);
+      if (!campaign) {
+        return res.status(404).json({ error: 'Campaign not found', code: 'CAMPAIGN_NOT_FOUND' });
+      }
+      const address = req.params.address.trim();
+      if (!validateGAddress(address)) {
+        return res.status(400).json({ error: 'Invalid Stellar address', code: 'INVALID_ADDRESS' });
+      }
+      const row = allowlistRepository.getProof(req.params.id, address);
+      if (!row) {
+        return res.status(404).json({ error: 'Address not in allowlist', code: 'NOT_IN_ALLOWLIST' });
+      }
+      const proof = row.merkle_proof ? JSON.parse(row.merkle_proof) : null;
+      return res.json({ campaignId: String(req.params.id), address, merkleRoot: row.merkle_root, proof });
     });
 
     // Org + RBAC member management routes (Issue #608)

@@ -267,6 +267,25 @@ impl CampaignContract {
         Ok(CURRENT_SCHEMA_VERSION)
     }
 
+    /// Replace the contract WASM in-place without resetting participant state.
+    ///
+    /// Calls `contract_update_current_contract_wasm` with the supplied hash of
+    /// the new WASM blob (must already be uploaded via
+    /// `Env::deployer().upload_contract_wasm`).  Participant records in
+    /// persistent storage survive because Soroban WASM-only upgrades never
+    /// touch storage.  Requires admin auth and a valid nonce so upgrades are
+    /// replay-safe.
+    ///
+    /// Typical workflow (issue #518):
+    ///   1. Upload new WASM → obtain `new_wasm_hash`.
+    ///   2. Call `upgrade(admin, nonce, new_wasm_hash)`.
+    ///   3. If storage layout changed, call `migrate(admin, target_version)`.
+    pub fn upgrade(env: Env, admin: Address, nonce: u64, new_wasm_hash: BytesN<32>) -> Result<(), Error> {
+        require_admin_with_nonce(&env, &admin, nonce)?;
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        Ok(())
+    }
+
     /// Set registration time window (admin only).
     ///
     /// Both bounds are inclusive: `register` succeeds when

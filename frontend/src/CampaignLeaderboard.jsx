@@ -286,8 +286,9 @@ export default function CampaignLeaderboard({
           </div>
 
           {/* Table header */}
+          <div className="lb-table">
           <div
-            className="lb-table"
+            className="lb-table-inner"
             role="table"
             aria-label="Campaign leaderboard"
             aria-rowcount={total + 1}
@@ -369,6 +370,7 @@ export default function CampaignLeaderboard({
                 )}
               />
             )}
+          </div>
           </div>
 
           {/* Load more */}

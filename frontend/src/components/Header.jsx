@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import DevNetworkSwitcher from './DevNetworkSwitcher';
 
@@ -29,18 +30,40 @@ export default function Header({
   const nextTheme = theme === 'dark' ? 'light' : 'dark';
   const balanceLabel = `${stellarNetwork === 'mainnet' ? 'Mainnet' : 'Testnet'} balance`;
   const { pathname } = useLocation();
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const toggleMenu = () => setMenuOpen((prev) => !prev);
+  const closeMenu = () => setMenuOpen(false);
 
   return (
     <header className="site-header">
       <nav className="nav" aria-label="Primary">
-        <a href="/" className="nav-logo" aria-label="Trivela home">
-          <span className="nav-logo-icon" aria-hidden="true">
-            ◇
-          </span>
-          Trivela
-        </a>
+        <div className="nav-top-row">
+          <a href="/" className="nav-logo" aria-label="Trivela home" onClick={closeMenu}>
+            <span className="nav-logo-icon" aria-hidden="true">
+              ◇
+            </span>
+            Trivela
+          </a>
 
-        <div className="nav-actions">
+          <button
+            type="button"
+            className="nav-hamburger"
+            onClick={toggleMenu}
+            aria-expanded={menuOpen}
+            aria-controls="nav-mobile-menu"
+            aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+          >
+            <span className="nav-hamburger-bar" aria-hidden="true" />
+            <span className="nav-hamburger-bar" aria-hidden="true" />
+            <span className="nav-hamburger-bar" aria-hidden="true" />
+          </button>
+        </div>
+
+        <div
+          id="nav-mobile-menu"
+          className={`nav-actions${menuOpen ? ' nav-actions--open' : ''}`}
+        >
           <div className="nav-links">
             {NAV_LINKS.map((link) => (
               <a
@@ -48,6 +71,7 @@ export default function Header({
                 href={link.href}
                 className={pathname === link.href ? 'nav-link-active' : undefined}
                 aria-current={pathname === link.href ? 'page' : undefined}
+                onClick={closeMenu}
               >
                 {link.label}
               </a>
@@ -57,6 +81,7 @@ export default function Header({
                 href="/history"
                 className={pathname === '/history' ? 'nav-link-active' : undefined}
                 aria-current={pathname === '/history' ? 'page' : undefined}
+                onClick={closeMenu}
               >
                 History
               </a>
